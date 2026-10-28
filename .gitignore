@@ -1,0 +1,13 @@
+# The original Python timer and its packaged builds stay on disk only:
+# they are binaries the institute's antivirus quarantined, and the source
+# is a colleague's work.
+ref/
+
+# Never commit executables or build output.
+*.exe
+build/
+dist/
+
+# Local editor and visual-companion leftovers.
+.superpowers/
+.vscode/
