@@ -60,6 +60,8 @@ body.clock-only #panel { display: none; }
 #cueWrap tr.done td { color: var(--green); }
 #cueWrap tr.broken td { color: var(--red); }
 #cueWrap td.empty { color: var(--muted); text-align: center; }
+#cueWrap tr.slot td { font-style: italic; }
+#slotTotal { color: var(--muted); margin: 0 6px 0 2px; }
 #editor { justify-content: flex-start; }
 #cLabel { flex: 1 1 12em; min-width: 8em; }
 .look { justify-content: flex-start; gap: 8px 20px; }
@@ -107,24 +109,24 @@ kbd { font: 13px Consolas, monospace; background: var(--edge); border-radius: 3p
     </div>
     <div class="row">
       <div class="group">
-        <span class="muted">Talk length</span>
-        <span class="pair">
-          <input id="tMin" type="number" min="0" max="599" value="00" aria-label="Talk length minutes">
-          <span>:</span>
-          <input id="tSec" type="number" min="0" max="59" value="00" aria-label="Talk length seconds">
-        </span>
+        <span class="muted">Talk</span>
+        <input id="tMin" type="number" min="1" max="599" value="15" aria-label="Talk minutes">
+        <span class="muted">min &middot; Warn at</span>
+        <input id="wMin" type="number" min="0" max="599" value="3" aria-label="Warning bell, minutes left in the talk">
+        <span class="muted">min left &middot; Discussion</span>
+        <input id="dMin" type="number" min="0" max="599" value="5" aria-label="Discussion minutes">
+        <span class="muted">min</span>
+        <span id="slotTotal"></span>
         <button id="tSet">Set</button>
         <button id="tClear">Clear</button>
       </div>
       <div class="group" id="presets">
-        <span class="muted">Presets</span>
-        <button data-minutes="5">5</button>
-        <button data-minutes="10">10</button>
-        <button data-minutes="12">12</button>
-        <button data-minutes="15">15</button>
-        <button data-minutes="20">20</button>
-        <button data-minutes="30">30</button>
-        <span class="muted">min</span>
+        <span class="muted">Talk + discussion</span>
+        <button data-talk="12" data-discussion="3">12+3</button>
+        <button data-talk="15" data-discussion="5">15+5</button>
+        <button data-talk="20" data-discussion="5">20+5</button>
+        <button data-talk="25" data-discussion="5">25+5</button>
+        <button data-talk="20" data-discussion="10">20+10</button>
       </div>
     </div>
   </section>
@@ -169,7 +171,7 @@ kbd { font: 13px Consolas, monospace; background: var(--edge); border-radius: 3p
       <label>Clock size <select id="sizeSel"><option value="">Auto</option></select></label>
       <label>Cue text <input id="cueSize" type="number" min="10" max="72" value="13"></label>
     </div>
-    <p id="hint">A cue rings when the clock above reads its time. After the talk length runs out, the clock counts the discussion up from 00:00; pick Discussion for a cue that rings then. Double click a cue to edit it. Press <kbd>?</kbd> for keys.</p>
+    <p id="hint">The Talk, Warn and Discussion boxes give the usual bells: one ding at the warning, two when the talk ends, three when the discussion ends (shown in italics; change them with the boxes, 0 = no bell). Add your own cues below: a cue rings when the clock above reads its time, and after the talk the clock counts the discussion up from 00:00. Double click a cue to edit it. Press <kbd>?</kbd> for keys.</p>
   </section>
 </div>
 
@@ -210,7 +212,11 @@ var MAX_MINUTES = 599;
 var MAX_SECONDS = MAX_MINUTES * 60 + 59;
 var RING_NAMES = ['single', 'double', 'triple', 'flurry'];
 var DEFAULT_RING = 'single';
-var TARGET_RING = 'flurry';
+// Bells by the usual conference count: one to warn, two when the talk
+// ends, three when the discussion ends.
+var WARN_RING = 'single';
+var TARGET_RING = 'double';
+var DISCUSSION_RING = 'triple';
 // A bigger gap than this between the two clocks means the PC slept.
 var SLEEP_TOLERANCE_MS = 2000;
 
@@ -375,7 +381,7 @@ function checkDue(cues, S, elapsed, targetFired) {
   }
   if (S.target && !targetFired && elapsed >= S.target) {
     result.timesUp = true;
-    // A cue at 0:00 rings instead of the flurry, not on top of it.
+    // A cue at 0:00 rings instead of the talk-end bell, not on top of it.
     result.coincident = due.filter(function (c) { return fireAt(c, S) === S.target; });
     if (!result.coincident.length) {
       result.ringSound = TARGET_RING;
@@ -453,6 +459,7 @@ function stripModel(cues, S, state, elapsed) {
     var f = fireAt(c, S);
     if (c.enabled && f !== null && f <= span) notches.push({ x: f / span, fired: c.fired });
   });
+  if (S.target) notches.push({ x: S.target / span, fired: elapsed >= S.target });
   return {
     fraction: Math.max(0, Math.min(1, elapsed / span)),
     fill: elapsed > end ? 'red' : state === 'running' ? 'green' : 'muted',
@@ -465,6 +472,40 @@ function stripModel(cues, S, state, elapsed) {
 function adjustedElapsed(S, elapsed, deltaShown) {
   var falling = countingDown(S) && elapsed <= S.target;
   return Math.max(0, elapsed + (falling ? -deltaShown : deltaShown));
+}
+
+// The cues behind the Warn and Discussion boxes (the talk-end bell is the
+// target itself). Like any cue they follow the clock's direction.
+function slotCues(S) {
+  var list = [];
+  if (!S.target) return list;
+  if (S.warn && S.warn < S.target) {
+    list.push({ auto: true, at: countingDown(S) ? S.warn : S.target - S.warn,
+      label: S.warn / 60 + ' min left', sound: WARN_RING, enabled: true, fired: false });
+  }
+  if (S.discussion) {
+    list.push({ auto: true, at: -S.discussion,
+      label: 'End of discussion', sound: DISCUSSION_RING, enabled: true, fired: false });
+  }
+  return list;
+}
+
+// Puts the box cues in place of the old ones. A hand-made cue at the same
+// time gives way to them.
+function placeSlotCues(cues, S) {
+  var fresh = slotCues(S);
+  for (var i = cues.length - 1; i >= 0; i--) {
+    var c = cues[i];
+    if (c.auto || fresh.some(function (f) { return f.at === c.at; })) cues.splice(i, 1);
+  }
+  fresh.forEach(function (f) { cues.push(f); });
+}
+
+// Checks the talk and warning times (seconds). Returns the problem or null.
+function slotProblem(talk, warn) {
+  if (talk <= 0) return 'Talk time must be greater than zero.';
+  if (warn >= talk) return 'The warning must come before the talk ends: less than ' + talk / 60 + ' min.';
+  return null;
 }
 
 
@@ -568,7 +609,7 @@ var STORAGE_KEY = 'sessionTimer.v1';
 
 function defaultState() {
   return {
-    target: null, countdown: true, muted: false, clockOnly: false,
+    target: 900, warn: 180, discussion: 300, countdown: true, muted: false, clockOnly: false,
     clockFont: null, clockSize: null, cueSize: 13, cues: [],
     clock: { state: 'idle', bankedMs: 0, segmentStartWall: 0 }
   };
@@ -582,7 +623,11 @@ function isInt(v, lo, hi) {
 function sanitizeState(raw) {
   var d = defaultState();
   if (!raw || typeof raw !== 'object') return d;
-  if (isInt(raw.target, 1, MAX_SECONDS)) d.target = raw.target;
+  // The 15 + 3 + 5 slot is for a first visit only; saved settings, even
+  // older ones without the warning and discussion, stand as they are.
+  d.target = isInt(raw.target, 1, MAX_SECONDS) ? raw.target : null;
+  d.warn = isInt(raw.warn, 0, MAX_SECONDS) ? raw.warn : 0;
+  d.discussion = isInt(raw.discussion, 0, MAX_SECONDS) ? raw.discussion : 0;
   ['countdown', 'muted', 'clockOnly'].forEach(function (k) {
     if (typeof raw[k] === 'boolean') d[k] = raw[k];
   });
@@ -630,10 +675,12 @@ function saveState(storage, state) {
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify({
       version: 1,
-      target: state.target, countdown: state.countdown, muted: state.muted,
+      target: state.target, warn: state.warn, discussion: state.discussion,
+      countdown: state.countdown, muted: state.muted,
       clockOnly: state.clockOnly, clockFont: state.clockFont,
       clockSize: state.clockSize, cueSize: state.cueSize,
-      cues: state.cues.map(function (c) {
+      // The box cues are rebuilt from warn and discussion on load.
+      cues: state.cues.filter(function (c) { return !c.auto; }).map(function (c) {
         return { at: c.at, label: c.label, sound: c.sound, enabled: c.enabled };
       }),
       clock: state.clock
@@ -786,13 +833,15 @@ function startApp() {
   var storage = getStorage();
   var stored = loadState(storage);
   var S = {
-    target: stored.target, countdown: stored.countdown, muted: stored.muted,
+    target: stored.target, warn: stored.warn, discussion: stored.discussion,
+    countdown: stored.countdown, muted: stored.muted,
     clockOnly: stored.clockOnly, clockFont: stored.clockFont,
     clockSize: stored.clockSize, cueSize: stored.cueSize
   };
   var cues = stored.cues;
   var timer = new Timer(realClock);
   timer.restore(stored.clock);
+  placeSlotCues(cues, S);
   sortCues(cues, S);
   // After a reload, anything that should already have rung stays silent.
   var targetFired = rearm(cues, S, timer.elapsed());
@@ -808,7 +857,8 @@ function startApp() {
 
   function persist() {
     saveState(storage, {
-      target: S.target, countdown: S.countdown, muted: S.muted, clockOnly: S.clockOnly,
+      target: S.target, warn: S.warn, discussion: S.discussion,
+      countdown: S.countdown, muted: S.muted, clockOnly: S.clockOnly,
       clockFont: S.clockFont, clockSize: S.clockSize, cueSize: S.cueSize,
       cues: cues, clock: timer.snapshot()
     });
@@ -1018,11 +1068,26 @@ function startApp() {
     refreshTable(); persist(); reschedule(); Bells.forget(); render();
   }
 
-  // ---------------- talk length and direction ----------------
+  // ---------------- talk, warning, discussion and direction ----------------
 
   function setPair(minId, secId, total) {
     $(minId).value = pad2(Math.floor(total / 60));
     $(secId).value = pad2(total % 60);
+  }
+
+  function minutesIn(id) { return readPair($(id).value, '0').total; }
+
+  function showSlot() {
+    $('tMin').value = S.target ? String(Math.floor(S.target / 60)) : '0';
+    $('wMin').value = String(Math.floor(S.warn / 60));
+    $('dMin').value = String(Math.floor(S.discussion / 60));
+    updateTotal();
+  }
+
+  // "= 20 min slot", worked out from what is typed, before Set.
+  function updateTotal() {
+    var talk = minutesIn('tMin');
+    $('slotTotal').textContent = talk ? '= ' + (talk + minutesIn('dMin')) / 60 + ' min slot' : '';
   }
 
   // Force whatever was typed back into padded digits within range.
@@ -1038,26 +1103,25 @@ function startApp() {
   }
 
   function afterTimingChange() {
+    placeSlotCues(cues, S);
     sortCues(cues, S);
     targetFired = rearm(cues, S, now());
     refreshTable(); persist(); reschedule(); render();
   }
 
-  function applyTarget(total) {
-    if (total <= 0) { setBanner('Time must be greater than zero.', 'red'); return; }
-    S.target = total;
-    setPair('tMin', 'tSec', total);
+  function applySlotFromFields() {
+    var talk = minutesIn('tMin'), warn = minutesIn('wMin'), discussion = minutesIn('dMin');
+    var problem = slotProblem(talk, warn);
+    if (problem) { setBanner(problem, 'red'); return; }
+    S.target = talk; S.warn = warn; S.discussion = discussion;
+    showSlot();
     afterTimingChange();
     if (!warnUnreachable()) setBanner('');
   }
 
-  function applyTargetFromFields() {
-    applyTarget(readPair($('tMin').value, $('tSec').value).total);
-  }
-
   function clearTarget() {
     S.target = null;
-    setPair('tMin', 'tSec', 0);
+    showSlot();
     afterTimingChange();
     if (!warnUnreachable() && cues.length) setBanner('No talk length, so cue times are now time elapsed.', 'muted');
   }
@@ -1166,31 +1230,56 @@ function startApp() {
 
   // ---------------- cue list ----------------
 
+  function addRow(body, cells) {
+    var tr = document.createElement('tr');
+    cells.forEach(function (text) {
+      var td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+    return tr;
+  }
+
+  // The talk-end bell isn't a cue, but the chair should see it in the list,
+  // unless a cue of their own rings in its place.
+  function talkEndRow(body) {
+    var replaced = cues.some(function (c) { return c.enabled && fireAt(c, S) === S.target; });
+    if (replaced) return;
+    var tr = addRow(body, ['●', countingDown(S) ? '00:00' : formatHms(S.target), 'Talk over', TARGET_RING]);
+    tr.className = 'slot' + (targetFired ? ' done' : '');
+  }
+
   function refreshTable() {
     var body = $('cueBody');
     body.textContent = '';
-    if (!cues.length) {
-      var tr0 = document.createElement('tr'), td0 = document.createElement('td');
+    if (!cues.length && !S.target) {
+      var td0 = addRow(body, ['No cues yet. Add one below: a time, a name and a ring.']).firstChild;
       td0.colSpan = 4; td0.className = 'empty';
-      td0.textContent = 'No cues yet. Add one below: a time, a name and a ring.';
-      tr0.appendChild(td0); body.appendChild(tr0);
       return;
     }
+    var endShown = !S.target;
     cues.forEach(function (cue, index) {
-      var tr = document.createElement('tr');
-      var mark = '●';
-      if (!cue.enabled) { tr.className = 'off'; mark = '○'; }
-      else if (fireAt(cue, S) === null) { tr.className = 'broken'; mark = '!'; }
-      else if (cue.fired) tr.className = 'done';
+      var f = fireAt(cue, S);
+      if (!endShown && (f === null || f > S.target)) { talkEndRow(body); endShown = true; }
+      var mark = '●', cls = '';
+      if (!cue.enabled) { cls = 'off'; mark = '○'; }
+      else if (f === null) { cls = 'broken'; mark = '!'; }
+      else if (cue.fired) cls = 'done';
+      var tr = addRow(body, [mark, cueTimeText(cue), cue.label || '—', cue.sound]);
+      tr.className = cls;
+      if (cue.auto) tr.classList.add('slot');
       if (cue === selected) tr.classList.add('selected');
       tr.setAttribute('data-index', String(index));
-      [mark, cueTimeText(cue), cue.label || '—', cue.sound].forEach(function (text) {
-        var td = document.createElement('td');
-        td.textContent = text;
-        tr.appendChild(td);
-      });
-      body.appendChild(tr);
     });
+    if (!endShown) talkEndRow(body);
+  }
+
+  // The box cues are changed through the boxes, so they stay in step.
+  function handMade(cue) {
+    if (!cue.auto) return true;
+    setBanner('This bell comes from the Warn / Discussion boxes above: change it there (0 = no bell).', 'muted');
+    return false;
   }
 
   function rowCue(e) {
@@ -1255,7 +1344,7 @@ function startApp() {
 
   function editSelected() {
     var cue = selectedCue();
-    if (!cue) return;
+    if (!cue || !handMade(cue)) return;
     editing = cue;
     $('cPhase').value = cue.at < 0 ? 'discussion' : 'talk';
     setPair('cMin', 'cSec', Math.abs(cue.at));
@@ -1274,7 +1363,7 @@ function startApp() {
 
   function toggleSelected() {
     var cue = selectedCue();
-    if (!cue) return;
+    if (!cue || !handMade(cue)) return;
     cue.enabled = !cue.enabled;
     var f = fireAt(cue, S);
     if (cue.enabled && f !== null && now() < f) cue.fired = false;
@@ -1283,7 +1372,7 @@ function startApp() {
 
   function deleteSelected() {
     var cue = selectedCue();
-    if (!cue) return;
+    if (!cue || !handMade(cue)) return;
     cues.splice(cues.indexOf(cue), 1);
     if (cue === editing) endEdit();
     selected = null;
@@ -1311,14 +1400,20 @@ function startApp() {
   $('optClockOnly').addEventListener('change', function () { setClockOnly(this.checked); });
   $('optMute').addEventListener('change', function () { setMute(this.checked); });
   $('optFull').addEventListener('change', function () { setFullscreen(this.checked); });
-  $('tSet').addEventListener('click', applyTargetFromFields);
+  $('tSet').addEventListener('click', applySlotFromFields);
   $('tClear').addEventListener('click', clearTarget);
+  // A preset sets the talk and the discussion; the warning stays as typed.
   Array.prototype.forEach.call($('presets').querySelectorAll('button'), function (b) {
-    b.addEventListener('click', function () { applyTarget(Number(b.getAttribute('data-minutes')) * 60); });
+    b.addEventListener('click', function () {
+      $('tMin').value = b.getAttribute('data-talk');
+      $('dMin').value = b.getAttribute('data-discussion');
+      applySlotFromFields();
+    });
   });
-  [['tMin', MAX_MINUTES], ['tSec', 59], ['cMin', MAX_MINUTES], ['cSec', 59]].forEach(function (pair) {
+  [['tMin', MAX_MINUTES], ['wMin', MAX_MINUTES], ['dMin', MAX_MINUTES], ['cMin', MAX_MINUTES], ['cSec', 59]].forEach(function (pair) {
     $(pair[0]).addEventListener('blur', function () { tidyField(this, pair[1]); });
   });
+  ['tMin', 'dMin'].forEach(function (id) { $(id).addEventListener('input', updateTotal); });
   $('fontSel').addEventListener('change', function () {
     S.clockFont = this.value; this.blur(); persist(); render();
   });
@@ -1375,7 +1470,7 @@ function startApp() {
     }
     if (inField(el)) {
       if (e.key === 'Enter') {
-        if (el.id === 'tMin' || el.id === 'tSec') applyTargetFromFields();
+        if (el.id === 'tMin' || el.id === 'wMin' || el.id === 'dMin') applySlotFromFields();
         else if (el.id === 'cMin' || el.id === 'cSec' || el.id === 'cLabel') commitCue();
         else if (el.id === 'cueSize') applyCueSize();
       }
@@ -1409,7 +1504,7 @@ function startApp() {
   $('optMute').checked = S.muted;
   $('optClockOnly').checked = S.clockOnly;
   document.body.classList.toggle('clock-only', S.clockOnly);
-  if (S.target) setPair('tMin', 'tSec', S.target);
+  showSlot();
   fillAppearance();
   Bells.init(function () { updatePills(); reschedule(); });
   updatePills();
@@ -1576,7 +1671,7 @@ SELFTESTS.push({ name: 'checkDue', fn: function (t) {
   t.eq('fires once', r.due.length, 0);
   r = checkDue(cues, down, 1000, false);
   t.eq('jump: 2:00 cue and time up together', [r.due.length, r.timesUp], [1, true]);
-  t.eq('time up without coincident cue rings the flurry', [r.ringSound, r.ringOwner], ['flurry', 'target']);
+  t.eq('time up without coincident cue rings the talk-end bell', [r.ringSound, r.ringOwner], ['double', 'target']);
   t.ok('disabled never due', !cues[2].fired);
 
   var zero = [testCue(0, { sound: 'triple', label: 'End' })];
@@ -1594,12 +1689,12 @@ SELFTESTS.push({ name: 'planRings', fn: function (t) {
   var down = { target: 600, countdown: true };
   var cues = [testCue(300), testCue(120, { sound: 'double' }), testCue(60, { enabled: false }), testCue(900)];
   var plan = planRings(cues, down, 100, false);
-  t.eq('plan delays', plan.map(function (p) { return [p.delay, p.sound]; }), [[200, 'single'], [380, 'double'], [500, 'flurry']]);
+  t.eq('plan delays', plan.map(function (p) { return [p.delay, p.sound]; }), [[200, 'single'], [380, 'double'], [500, 'double']]);
   t.eq('target owner', plan[2].owner, 'target');
   cues[0].fired = true;
   t.eq('fired cues are skipped', planRings(cues, down, 100, false).length, 2);
   var zero = [testCue(0, { sound: 'triple' })];
-  t.eq('coincident 0:00 cue replaces the flurry', planRings(zero, down, 0, false).map(function (p) { return p.sound; }), ['triple']);
+  t.eq('coincident 0:00 cue replaces the talk-end bell', planRings(zero, down, 0, false).map(function (p) { return p.sound; }), ['triple']);
   t.eq('nothing after time up', planRings([], down, 700, true).length, 0);
   t.eq('count up, no target', planRings([testCue(30)], { target: null, countdown: true }, 10, false).map(function (p) { return p.delay; }), [20]);
 } });
@@ -1633,7 +1728,7 @@ SELFTESTS.push({ name: 'display', fn: function (t) {
   t.eq('status idle, nothing set', statusText({ target: null, countdown: true }, 'idle', 0, [], false), 'Ready');
 
   var m = stripModel(cues, down, 'running', 150);
-  t.eq('strip', m, { fraction: 0.25, fill: 'green', notches: [{ x: 0.5, fired: false }, { x: 0.8, fired: false }] });
+  t.eq('strip', m, { fraction: 0.25, fill: 'green', notches: [{ x: 0.5, fired: false }, { x: 0.8, fired: false }, { x: 1, fired: false }] });
   t.eq('strip over', stripModel([], down, 'running', 700).fill, 'red');
   t.eq('strip paused', stripModel([], down, 'paused', 10).fill, 'muted');
   t.eq('strip span from cues', stripModel([testCue(200)], { target: null, countdown: true }, 'idle', 100).fraction, 0.5);
@@ -1767,7 +1862,7 @@ SELFTESTS.push({ name: 'discussion', fn: function (t) {
     'Marked ! and silent: discussion cues need a talk length.');
 
   var m = stripModel([testCue(180), disc], down, 'running', 600);
-  t.eq('strip spans the whole slot', [m.fraction, m.fill, m.notches.map(function (n) { return n.x; })], [0.5, 'green', [0.6, 1]]);
+  t.eq('strip spans the whole slot', [m.fraction, m.fill, m.notches.map(function (n) { return n.x; })], [0.5, 'green', [0.6, 1, 0.75]]);
   t.eq('strip red in the discussion', stripModel([disc], down, 'running', 1000).fill, 'red');
 
   t.eq('up in the talk: more time left', adjustedElapsed(down, 600, 60), 540);
@@ -1779,6 +1874,50 @@ SELFTESTS.push({ name: 'discussion', fn: function (t) {
   var state = defaultState(); state.target = 900; state.cues = [testCue(-300)];
   saveState(st, state);
   t.eq('discussion cue survives storage', loadState(st).cues[0].at, -300);
+} });
+
+SELFTESTS.push({ name: 'slot boxes', fn: function (t) {
+  // Talk 15, warn at 3 min left, discussion 5: one, two, three bells.
+  var down = { target: 900, warn: 180, discussion: 300, countdown: true };
+  var up = { target: 900, warn: 180, discussion: 300, countdown: false };
+  function shape(cues) { return cues.map(function (c) { return [c.at, c.label, c.sound, !!c.auto]; }); }
+  t.eq('box cues counting down', shape(slotCues(down)),
+    [[180, '3 min left', 'single', true], [-300, 'End of discussion', 'triple', true]]);
+  t.eq('warning counting up sits at 12:00', slotCues(up)[0].at, 720);
+  t.eq('0 = no bell', slotCues({ target: 900, warn: 0, discussion: 0, countdown: true }), []);
+  t.eq('no talk, no box cues', slotCues({ target: null, warn: 180, discussion: 300, countdown: true }), []);
+  t.eq('warning at or past the talk end is dropped', shape(slotCues({ target: 120, warn: 180, discussion: 0, countdown: true })), []);
+
+  var cues = slotCues(down);
+  sortCues(cues, down);
+  var plan = planRings(cues, down, 0, false).sort(function (a, b) { return a.delay - b.delay; });
+  t.eq('whole slot: one, two, three bells', plan.map(function (p) { return [p.delay, p.sound]; }),
+    [[720, 'single'], [900, 'double'], [1200, 'triple']]);
+
+  var mine = [testCue(180, { label: 'Mine' }), testCue(60, { label: 'Keep' })];
+  placeSlotCues(mine, down);
+  t.eq('box cue replaces a hand-made one at its time', shape(mine),
+    [[60, 'Keep', 'single', false], [180, '3 min left', 'single', true], [-300, 'End of discussion', 'triple', true]]);
+  placeSlotCues(mine, { target: 900, warn: 120, discussion: 0, countdown: true });
+  t.eq('changing the boxes swaps the box cues', shape(mine),
+    [[60, 'Keep', 'single', false], [120, '2 min left', 'single', true]]);
+
+  t.eq('talk must be set', slotProblem(0, 0), 'Talk time must be greater than zero.');
+  t.eq('warning inside the talk', slotProblem(900, 900), 'The warning must come before the talk ends: less than 15 min.');
+  t.eq('fine slot', slotProblem(900, 180), null);
+
+  t.eq('first visit is 15 + 3 + 5', [defaultState().target, defaultState().warn, defaultState().discussion], [900, 180, 300]);
+  var st = memoryStorage();
+  var state = defaultState(); state.target = 1200; state.warn = 120; state.discussion = 0;
+  state.cues = [testCue(60, { label: 'Keep' })].concat(slotCues(state));
+  saveState(st, state);
+  var saved = JSON.parse(st.data[STORAGE_KEY]);
+  t.eq('box cues are not stored', saved.cues.map(function (c) { return c.label; }), ['Keep']);
+  var back = loadState(st);
+  t.eq('boxes round trip', [back.target, back.warn, back.discussion], [1200, 120, 0]);
+  var old = memoryStorage();
+  old.setItem(STORAGE_KEY, JSON.stringify({ target: null, cues: [] }));
+  t.eq('older saved settings: no target, no box bells', [loadState(old).target, loadState(old).warn, loadState(old).discussion], [null, 0, 0]);
 } });
 
 function runSelftest() {

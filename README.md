@@ -14,9 +14,22 @@ It replaces an older Python timer packaged as an `.exe`. Antivirus software quar
 ### Before the session
 
 1. Open the timer and **click once anywhere**. Browsers only allow sound after a click; the orange "Click anywhere to enable sound" note disappears once sound is on.
-2. Set the **talk length**: click a preset (5, 10, 12, 15, 20, 30 min) or type minutes and seconds and press **Set**.
-3. Add **cues** (optional), the bells that ring at set moments. Use the row under the cue list: pick **Talk** or **Discussion**, type a time, give it a name, choose a ring, press **Add cue**.
-4. Press **F** for full screen and **C** for "clock only" (hides the cue list).
+2. Fill in the three boxes, in minutes, and press **Set** (or Enter):
+
+   `Talk [15] min · Warn at [3] min left · Discussion [5] min = 20 min slot`
+
+   Or click a preset (**12+3, 15+5, 20+5, 25+5, 20+10**); it sets the talk and discussion and keeps your warning. A first visit starts at 15 + 3 + 5.
+3. That gives the usual conference bells:
+
+   | Bell | When |
+   |---|---|
+   | 1 ding | Warning: 3 min left in the talk |
+   | 2 dings | Talk over |
+   | 3 dings | End of discussion |
+
+   Put **0** in Warn or Discussion for no bell there. These bells are shown in italics in the list and are changed only through the boxes.
+4. Extra **cues** (optional): use the row under the cue list. Pick **Talk** or **Discussion**, type a time, give it a name, choose a ring, press **Add cue**.
+5. Press **F** for full screen and **C** for "clock only" (hides the cue list).
 
 If an orange note says **"Screen may sleep"**, the browser couldn't keep the screen awake. Turn off screen sleep in Windows power settings for the session.
 
@@ -40,17 +53,9 @@ The clock is **green** while running, **amber** in the last minute (or the last 
 
 ### After the talk time: discussion
 
-When the talk length runs out, the timer rings, shows "Time's up", and then **counts the discussion up from 00:00** in red under a "Discussion" label. A **Discussion** cue rings when that clock reads its time.
+When the talk time runs out, the timer rings twice, shows "Time's up", and then **counts the discussion up from 00:00** in red under a "Discussion" label. The three-ding bell rings when that clock reads the discussion length; an extra **Discussion** cue rings when it reads the cue's time.
 
-**Example: 20 min slot = 15 min talk + 5 min discussion**
-
-| Picker | Time | Name | Ring |
-|---|---|---|---|
-| Talk | 03:00 | 3 min left | single |
-| Talk | 00:00 | Talk over | double |
-| Discussion | 05:00 | End of discussion | flurry |
-
-Set the talk length to 15:00. For the next speaker, just press **R**, then **Space**.
+For the next speaker, just press **R**, then **Space**.
 
 ### Good to know
 
@@ -94,6 +99,8 @@ Set the talk length to 15:00. For the next speaker, just press **R**, then **Spa
 6. **selftest**: runs instead of the app when the URL ends in `#selftest`.
 
 Cue times mean "what the big clock reads". A discussion cue is stored with a negative time: `-300` rings 5:00 after the talk ends.
+
+The Talk / Warn / Discussion boxes are stored as `target`, `warn` and `discussion` (seconds; 0 = no bell). The talk-end bell is the target itself (`TARGET_RING`, double). `slotCues` builds the warning (single) and end-of-discussion (triple) bells as ordinary cues flagged `auto`, and `placeSlotCues` swaps them in whenever the timing changes. Auto cues are never saved; they are rebuilt from the boxes on load.
 
 ### Testing (Windows, Edge installed)
 

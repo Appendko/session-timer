@@ -17,12 +17,17 @@
   function val(id, v) { document.getElementById(id).value = v; }
   function rows() { return Array.prototype.map.call(document.querySelectorAll('#cueBody tr[data-index]'), function (tr) { return { cls: tr.className, cells: Array.prototype.map.call(tr.children, function (td) { return td.textContent; }) }; }); }
   function addCue(m, s, label, sound) { val('cMin', m); val('cSec', s); val('cLabel', label); val('cSound', sound); click('cCommit'); }
+  // Every row in the list, the talk-end row included: [time, name, ring].
+  function table() { return Array.prototype.map.call(document.querySelectorAll('#cueBody tr'), function (tr) { return Array.prototype.slice.call(tr.children, 1).map(function (td) { return td.textContent; }); }); }
+  function slot(talk, warn, discussion) { val('tMin', talk); val('wMin', warn); val('dMin', discussion); click('tSet'); }
 
   var steps = [
     function () {
-      click(document.querySelector('#presets button[data-minutes="10"]'));
-      check('preset 10 sets talk length', $t('status') === 'Ready   ·   elapsed 00:00 of 10:00', $t('status'));
-      check('fields show 10:00', document.getElementById('tMin').value === '10' && document.getElementById('tSec').value === '00', document.getElementById('tMin').value);
+      check('first visit: 15 + 3 + 5', ['tMin', 'wMin', 'dMin'].map(function (id) { return document.getElementById(id).value; }).join() === '15,3,5' && $t('slotTotal') === '= 20 min slot', $t('slotTotal'));
+      check('first visit: one, two, three bells listed', JSON.stringify(table()) === JSON.stringify([['03:00', '3 min left', 'single'], ['00:00', 'Talk over', 'double'], ['05:00 (discussion)', 'End of discussion', 'triple']]), JSON.stringify(table()));
+      slot('10', '0', '0');
+      check('boxes set a 10 min talk, no other bells', $t('status') === 'Ready   ·   elapsed 00:00 of 10:00' && rows().length === 0, $t('status'));
+      check('talk-end row alone', JSON.stringify(table()) === JSON.stringify([['00:00', 'Talk over', 'double']]), JSON.stringify(table()));
       check('sound pill shown before any gesture', !document.getElementById('pillSound').hidden, 'hidden');
     },
     function () {
@@ -32,7 +37,7 @@
       var r = rows();
       check('three cues, in ring order', r.length === 3 && r[0].cells[1] === '05:00' && r[1].cells[1] === '02:00' && r[2].cells[1] === '00:00', JSON.stringify(r));
       check('empty label shows a dash', r[2].cells[2] === '—', r[2].cells[2]);
-      check('strip has 3 notches', document.querySelectorAll('#stripNotches i').length === 3, document.querySelectorAll('#stripNotches i').length);
+      check('strip has 3 cue notches + talk end', document.querySelectorAll('#stripNotches i').length === 4, document.querySelectorAll('#stripNotches i').length);
     },
     function () {
       addCue('5', '00', 'dup', 'single');
@@ -133,19 +138,19 @@
       document.getElementById('optCountdown').click();
       check('untick count down', $t('banner') === 'Cue times are now time elapsed.' && $t('status') === 'Ready   ·   of 10:00   ·   next cue Questions in 02:00', $t('banner') + ' | ' + $t('status'));
       document.getElementById('optCountdown').click();
-      val('tMin', '1'); val('tSec', '30'); click('tSet');
-      check('short talk strands the 2:00 cue', $t('banner') === 'Marked ! and silent: the clock never reads 02:00 counting down from 01:30.', $t('banner'));
+      val('tMin', '1'); click('tSet');
+      check('short talk strands the 2:00 cue', $t('banner') === 'Marked ! and silent: the clock never reads 02:00 counting down from 01:00.', $t('banner'));
       check('stranded row marked !', rows().some(function (r) { return r.cls.indexOf('broken') >= 0 && r.cells[0] === '!'; }), JSON.stringify(rows()));
-      val('tMin', '90'); val('tSec', '00'); click('tSet');
+      val('tMin', '90'); click('tSet');
       check('90 minute talk accepted', $t('status').indexOf('of 1:30:00') >= 0, $t('status'));
-      val('tMin', '0'); val('tSec', '0'); click('tSet');
-      check('zero talk rejected', $t('banner') === 'Time must be greater than zero.', $t('banner'));
+      val('tMin', '0'); click('tSet');
+      check('zero talk rejected', $t('banner') === 'Talk time must be greater than zero.', $t('banner'));
       click('tClear');
       check('clear target', $t('status').indexOf('of ') < 0, $t('status'));
     },
     function () {
       // Reload while running: snapshot, then a second app instance restores it.
-      click(document.querySelector('#presets button[data-minutes="5"]'));
+      click(document.querySelector('#presets button[data-talk="12"]'));
       // A real mouse click blurs the field; synthetic click() doesn't.
       if (document.activeElement) document.activeElement.blur();
       key(' ');
@@ -156,27 +161,33 @@
       t2.restore(snap);
       check('restored elapsed matches', Math.abs(t2.elapsed() - 42) < 0.01, t2.elapsed());
     },
-    // ---- 20 min slot: 15 min talk + 5 min discussion ----
+    // ---- 20 min slot: 15 min talk + warn at 3 min left + 5 min discussion ----
     function () {
       key('r'); key('Enter');
-      while (rows().length) {
-        document.querySelector('#cueBody tr[data-index="0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      var mine;
+      while ((mine = document.querySelector('#cueBody tr[data-index]:not(.slot)'))) {
+        mine.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         click('cDelete');
       }
-      val('tMin', '15'); val('tSec', '00'); click('tSet');
-      addCue('3', '00', '3 min left', 'single');
-      addCue('0', '00', 'Talk over', 'double');
-      val('cPhase', 'discussion'); addCue('5', '00', 'End of discussion', 'flurry');
-      var r = rows();
-      check('slot cues in order', JSON.stringify(r.map(function (x) { return x.cells[1]; })) === JSON.stringify(['03:00', '00:00', '05:00 (discussion)']), JSON.stringify(r));
-      check('phase picker resets to Talk', document.getElementById('cPhase').value === 'talk', document.getElementById('cPhase').value);
+      slot('15', '3', '5');
+      check('slot total', $t('slotTotal') === '= 20 min slot', $t('slotTotal'));
+      check('slot bells in order', JSON.stringify(table()) === JSON.stringify([['03:00', '3 min left', 'single'], ['00:00', 'Talk over', 'double'], ['05:00 (discussion)', 'End of discussion', 'triple']]), JSON.stringify(table()));
       var xs = Array.prototype.map.call(document.querySelectorAll('#stripNotches i'), function (i) { return i.style.left; });
-      check('strip spans the 20 min slot', JSON.stringify(xs) === JSON.stringify(['60%', '75%', '100%']), JSON.stringify(xs));
+      check('strip spans the 20 min slot', JSON.stringify(xs) === JSON.stringify(['60%', '100%', '75%']), JSON.stringify(xs));
+      document.querySelector('#cueBody tr[data-index="1"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      check('box bells are changed through the boxes', $t('banner').indexOf('This bell comes from the Warn / Discussion boxes') === 0 && $t('cCommit') === 'Add cue', $t('banner'));
+      click('cDelete');
+      check('box bells cannot be deleted from the list', rows().length === 2, rows().length);
+      addCue('3', '00', 'mine', 'single');
+      check('a hand-made cue cannot take the warning time', $t('banner') === "There's already a cue at 03:00.", $t('banner'));
       val('cPhase', 'discussion'); addCue('0', '00', 'x', 'single');
       check('discussion 00:00 rejected', $t('banner').indexOf('A discussion cue needs a time after 00:00') === 0, $t('banner'));
-      document.querySelector('#cueBody tr[data-index="2"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      check('editing a discussion cue selects Discussion', document.getElementById('cPhase').value === 'discussion' && document.getElementById('cMin').value === '05', document.getElementById('cPhase').value);
-      click('cCancel');
+      slot('15', '15', '5');
+      check('warning must be inside the talk', $t('banner') === 'The warning must come before the talk ends: less than 15 min.', $t('banner'));
+      document.getElementById('optCountdown').click();
+      check('counting up, the bells keep their moments', JSON.stringify(table().map(function (r) { return r[0]; })) === JSON.stringify(['12:00', '15:00', '05:00 (discussion)']), JSON.stringify(table()));
+      document.getElementById('optCountdown').click();
+      slot('15', '3', '5');
       if (document.activeElement) document.activeElement.blur();
       check('clock reads 15:00', document.getElementById('clock').getAttribute('aria-label') === '15:00', document.getElementById('clock').getAttribute('aria-label'));
       key(' ');
@@ -187,7 +198,8 @@
       adv(180.1);
     },
     function () {
-      check('talk over rings the 00:00 cue', $t('banner') === "Time's up · Talk over", $t('banner'));
+      check("talk over: time's up", $t('banner') === "Time's up", $t('banner'));
+      check('talk-end row done', document.querySelector('#cueBody tr.slot:not([data-index])').className.indexOf('done') >= 0, document.querySelector('#cueBody tr.slot:not([data-index])').className);
       adv(60);
     },
     function () {
@@ -201,13 +213,17 @@
     function () {
       check('third ring at end of discussion', $t('banner') === 'End of discussion', $t('banner'));
       check('clock reads 05:00 at the end of discussion', document.getElementById('clock').getAttribute('aria-label') === '05:00', document.getElementById('clock').getAttribute('aria-label'));
-      check('discussion cue marked done', rows()[2].cls.indexOf('done') >= 0, JSON.stringify(rows()[2]));
+      check('discussion cue marked done', rows()[1].cls.indexOf('done') >= 0, JSON.stringify(rows()[1]));
       key('ArrowUp');
     },
     function () {
       check('up in the discussion adds to the reading', document.getElementById('clock').getAttribute('aria-label') === '06:00', document.getElementById('clock').getAttribute('aria-label'));
       key('r'); key('Enter');
       check('reset clears the discussion label', $t('banner') === '' && document.getElementById('clock').getAttribute('aria-label') === '15:00', $t('banner'));
+      click(document.querySelector('#presets button[data-talk="20"][data-discussion="10"]'));
+      check('preset sets talk and discussion, keeps the warning', ['tMin', 'wMin', 'dMin'].map(function (id) { return document.getElementById(id).value; }).join() === '20,3,10' && $t('slotTotal') === '= 30 min slot', $t('slotTotal'));
+      var saved = JSON.parse(localStorage.getItem('sessionTimer.v1'));
+      check('boxes saved', saved.target === 1200 && saved.warn === 180 && saved.discussion === 600 && saved.cues.length === 0, JSON.stringify(saved));
     }
   ];
 
